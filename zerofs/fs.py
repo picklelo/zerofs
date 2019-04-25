@@ -5,37 +5,104 @@ from collections import defaultdict
 from errno import ENOENT
 from stat import S_IFDIR, S_IFLNK, S_IFREG
 from time import time
-from typing import Dict, List
+from typing import Dict, List, Union
 
 from b2py import B2, utils as b2_utils
 from fuse import FUSE, FuseOSError, Operations, LoggingMixIn
 
 
-class BackblazeFS(LoggingMixIn, Operations):
-  """Virtual filesystem bcked by the B2 object store."""
+class File:
 
-  BUCKET_NAME = 'abcphotos'
+  def __init__(self, file: Dict):
+    self.name = file['fileName']
+    self.file_id = file['fileId']
+    self.content_size = file['contentLength']
+    self.upload_time = file['uploadTimestamp'] * 1e-3
 
-  def __init__(self):
+  def __repr__(self):
+    return '<File {}>'.format(self.name)
+
+  @property
+  def metadata(self) -> Dict:
+    return {
+      'st_mode': S_IFREG | 0o755,
+      'st_ctime': self.upload_time,
+      'st_mtime': self.upload_time,
+      'st_atime': self.upload_time,
+      'st_nlink': 1,
+      'st_size': self.content_size
+    }
+
+class Directory:
+
+  def __init__(self, files: List[File]):
+    children = defaultdict(list)
+    for file in files:
+      filename = file.name.strip('/')
+      parts = filename.split('/', 1)
+      if len(parts) > 1:
+        parent, path = parts
+      else:
+        parent, path = '', filename
+      file.name = path
+      children[parent].append(file)
+
+    self.files = {file.name: file for file in children['']}
+    del children['']
+    self.files.update({k: Directory(v) for k, v in children.items()})
+
+  @property
+  def upload_time(self) -> float:
+    if len(self.files) == 0:
+      return time()
+    return max([f.upload_time for f in self.files.values()])
+
+  @property
+  def metadata(self) -> Dict:
+    mod_time = self.upload_time
+    return {
+      'st_mode': S_IFDIR | 0o755,
+      'st_ctime': mod_time,
+      'st_mtime': mod_time,
+      'st_atime': mod_time,
+      'st_nlink': 2
+    }
+
+  def file_at_path(self, path: Union[str, List[str]]) -> File:
+    if type(path) == str:
+      path = path.strip('/').split('/')
+    if path[0] == '':
+      return self
+    file = self.files[path[0]]
+    if len(path) == 1:
+      return file
+    if type(file) == Directory:
+      return self.files[path[0]].file_at_path(path[1:])
+    raise KeyError('No such directory: {}'.format(path[0]))
+
+  def file_exists(self, path: str) -> bool:
+    try:
+      self.file_at_path(path)
+      return True
+    except KeyError:
+      return False
+
+class ZeroFS(LoggingMixIn, Operations):
+  """Virtual filesystem backed by the B2 object store."""
+
+  def __init__(self, bucket_name: str):
     self.b2 = B2()
     buckets = self.b2.list_buckets()
-    bucket = [b for b in buckets if b['bucketName'] == self.BUCKET_NAME]
+    bucket = [b for b in buckets if b['bucketName'] == bucket_name]
     if not len(bucket):
       raise ValueError(
-          'Create a bucket named {} to enable zerofs.'.format(self.BUCKET_NAME)
+        'Create a bucket named {} to enable zerofs.'.format(bucket_name)
       )
     self.bucket_id = bucket[0]['bucketId']
-    b2_files = self.b2.list_files(self.bucket_id, limit=1000)
+    files = [File(f) for f in self.b2.list_files(self.bucket_id, limit=1000)]
 
+    self.root = Directory(files)
     self.files = {}
-    for file in b2_files:
-      parent = self.files
-      path = file['fileName'].split(os.path)
-      for i in range(len(path) - 1):
-        if path[i] not in parent:
-          parent[path[i]] = {}
-        parent = parent[path[i]]
-      parent[path[-1]] = file
 
     self.data = defaultdict(bytes)
     self.fd = 0
@@ -69,18 +136,18 @@ class BackblazeFS(LoggingMixIn, Operations):
       return self.fd
 
   def getattr(self, path, fh=None):
-      if path not in self.files:
-          raise FuseOSError(ENOENT)
-
-      return self.files[path]
+    if not self.root.file_exists(path):
+      raise FuseOSError(ENOENT)
+    return self.root.file_at_path(path).metadata
 
   def getxattr(self, path, name, position=0):
-      attrs = self.files[path].get('attrs', {})
+    return ''
+    # attrs = self.files[path].get('attrs', {})
 
-      try:
-          return attrs[name]
-      except KeyError:
-          return ''       # Should return ENOATTR
+    # try:
+    #     return attrs[name]
+    # except KeyError:
+    #     return ''       # Should return ENOATTR
 
   def listxattr(self, path):
       attrs = self.files[path].get('attrs', {})
@@ -98,15 +165,17 @@ class BackblazeFS(LoggingMixIn, Operations):
       self.files['/']['st_nlink'] += 1
 
   def open(self, path, flags):
-      self.fd += 1
-      return self.fd
+    self.fd += 1
+    return self.fd
 
   def read(self, path, size, offset, fh):
-      return self.data[path][offset:offset + size]
+    file = self.root.file_at_path(path)
+    contents = self.b2.download_file(file.file_id)
+    return contents[offset: offset + size]
 
-  def readdir(self, path, fh):
-    files = self._list_files(path)
-    return ['.', '..'] + [f['fileName'] for f in files]
+  def readdir(self, path, _):
+    dir = self.root.file_at_path(path)
+    return ['.', '..'] + [f for f in dir.files]
 
   def readlink(self, path):
       return self.data[path]
@@ -175,7 +244,17 @@ if __name__ == '__main__':
   import argparse
   parser = argparse.ArgumentParser()
   parser.add_argument('mount')
+  parser.add_argument('--bucket', type=str, required=True, help='The B2 bucket to mount')
+  parser.add_argument('--background', action='store_true', help='Run in the background')
+  parser.add_argument('--verbose', action='store_true', help='Log debug info')
   args = parser.parse_args()
 
-  logging.basicConfig(level=logging.DEBUG)
-  fuse = FUSE(BackblazeFS(), args.mount, foreground=True, allow_other=True)
+  if args.verbose:
+    logging.basicConfig(level=logging.DEBUG)
+
+  fuse = FUSE(
+    ZeroFS(args.bucket),
+    args.mount,
+    foreground=not args.background,
+    allow_other=True
+  )
