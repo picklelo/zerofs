@@ -1,10 +1,29 @@
+from abc import ABC, abstractmethod
 from collections import defaultdict
 from stat import S_IFDIR, S_IFREG
 from time import time
 from typing import Dict, List, Union
 
 
-class File:
+class FileBase(ABC):
+  """Abstract base class for file-like objects."""
+
+  def __init__(self):
+    self.st_mode = None
+    self.st_uid = None
+    self.st_gid = None
+    self.attrs = {}
+
+  def chmod(self, mode):
+    self.st_mode &= 0o770000
+    self.st_mode != mode
+
+  def chown(self, uid, gid):
+    self.st_uid = uid
+    self.st_gid = gid
+
+
+class File(FileBase):
   """Represents a file backed by the object store."""
 
   def __init__(self, file: Dict):
@@ -13,10 +32,14 @@ class File:
     Args:
       file: A dictionary of file metadata from B2.
     """
+    super().__init__()
     self.name = file['fileName']
     self.file_id = file['fileId']
-    self.content_size = file['contentLength']
-    self.upload_time = file['uploadTimestamp'] * 1e-3
+    self.st_size = file['contentLength']
+    self.st_mtime = file['uploadTimestamp'] * 1e-3
+    self.st_ctime = self.st_mtime
+    self.st_atime = self.st_mtime
+    self.st_mode = S_IFREG | 0o755
 
   def __repr__(self):
     return '<File {}>'.format(self.name)
@@ -24,16 +47,16 @@ class File:
   @property
   def metadata(self) -> Dict:
     return {
-        'st_mode': S_IFREG | 0o755,
-        'st_ctime': self.upload_time,
-        'st_mtime': self.upload_time,
-        'st_atime': self.upload_time,
+        'st_mode': self.st_mode,
+        'st_ctime': self.st_ctime,
+        'st_mtime': self.st_mtime,
+        'st_atime': self.st_atime,
         'st_nlink': 1,
-        'st_size': self.content_size
+        'st_size': self.st_size
     }
 
 
-class Directory:
+class Directory(FileBase):
   """A virtual directory containing subfiles and directories."""
 
   def __init__(self, files: List[File]):
@@ -42,6 +65,8 @@ class Directory:
     Args:
       files: A list with file metadata for files in the directory.
     """
+    super().__init__()
+
     children = defaultdict(list)
     for file in files:
       filename = file.name.strip('/')
@@ -59,20 +84,21 @@ class Directory:
     del children['']
     self.files.update({k: Directory(v) for k, v in children.items()})
 
+    self.st_mode = S_IFDIR | 0o755
+
   @property
-  def upload_time(self) -> float:
+  def st_mtime(self) -> float:
     if len(self.files) == 0:
       return time()
-    return max([f.upload_time for f in self.files.values()])
+    return max([f.st_mtime for f in self.files.values()])
 
   @property
   def metadata(self) -> Dict:
-    mod_time = self.upload_time
     return {
-        'st_mode': S_IFDIR | 0o755,
-        'st_ctime': mod_time,
-        'st_mtime': mod_time,
-        'st_atime': mod_time,
+        'st_mode': self.st_mode,
+        'st_ctime': self.st_mtime,
+        'st_mtime': self.st_mtime,
+        'st_atime': self.st_mtime,
         'st_nlink': 2
     }
 

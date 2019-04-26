@@ -49,17 +49,15 @@ class ZeroFS(LoggingMixIn, Operations):
           'Create a bucket named {} to enable zerofs.'.format(self.bucket_name))
     self.bucket_id = bucket[0]['bucketId']
     files = [File(f) for f in self.b2.list_files(self.bucket_id, limit=1000)]
-
     self.root = Directory(files)
 
   def chmod(self, path, mode):
-    self.files[path]['st_mode'] &= 0o770000
-    self.files[path]['st_mode'] |= mode
-    return 0
+    file = self.root.file_at_path(path)
+    file.chmod(mode)
 
   def chown(self, path, uid, gid):
-    self.files[path]['st_uid'] = uid
-    self.files[path]['st_gid'] = gid
+    file = self.root.file_at_path(path)
+    file.chown(uid, gid)
 
   def create(self, path, mode):
     self.files[path] = dict(st_mode=(S_IFREG | mode),
@@ -77,18 +75,15 @@ class ZeroFS(LoggingMixIn, Operations):
       raise FuseOSError(ENOENT)
     return self.root.file_at_path(path).metadata
 
-  def getxattr(self, path, name, position=0):
+  def getxattr(self, path, name, _):
+    file = self.root.file_at_path(path)
+    if name in file.attrs:
+      return file.attrs[name]
     return ''
-    # attrs = self.files[path].get('attrs', {})
-
-    # try:
-    #     return attrs[name]
-    # except KeyError:
-    #     return ''       # Should return ENOATTR
 
   def listxattr(self, path):
-    attrs = self.files[path].get('attrs', {})
-    return attrs.keys()
+    file = self.root.file_at_path(path)
+    return file.attrs.keys()
 
   def mkdir(self, path, mode):
     self.files[path] = dict(st_mode=(S_IFDIR | mode),
@@ -119,12 +114,9 @@ class ZeroFS(LoggingMixIn, Operations):
     return self.data[path]
 
   def removexattr(self, path, name):
-    attrs = self.files[path].get('attrs', {})
-
-    try:
-      del attrs[name]
-    except KeyError:
-      pass  # Should return ENOATTR
+    file = self.root.file_at_path(path)
+    if name in file.attrs:
+      del file.attrs[name]
 
   def rename(self, old, new):
     self.data[new] = self.data.pop(old)
@@ -135,10 +127,9 @@ class ZeroFS(LoggingMixIn, Operations):
     self.files.pop(path)
     self.files['/']['st_nlink'] -= 1
 
-  def setxattr(self, path, name, value, options, position=0):
-    # Ignore options
-    attrs = self.files[path].setdefault('attrs', {})
-    attrs[name] = value
+  def setxattr(self, path, name, value, _, __):
+    file = self.root.file_at_path(path)
+    file.attrs[name] = value
 
   def statfs(self, path):
     return dict(f_bsize=512, f_blocks=4096, f_bavail=2048)
