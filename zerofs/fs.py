@@ -2,10 +2,10 @@ import logging
 import os
 
 from collections import defaultdict
-from errno import ENOENT, ENOTEMPTY
-from stat import S_IFDIR, S_IFLNK, S_IFREG
+from errno import ENOENT, ENOTEMPTY, EINVAL
+from stat import S_IFDIR, S_IFLNK
 from time import time
-from typing import Dict, List, Union
+from typing import Dict, List, Tuple, Union
 
 from b2py import B2, utils as b2_utils
 from fuse import FUSE, FuseOSError, Operations, LoggingMixIn
@@ -30,16 +30,6 @@ class ZeroFS(LoggingMixIn, Operations):
     self.b2 = B2()
     self._load_dir_tree()
 
-    self.files = {}
-    self.data = defaultdict(bytes)
-    self.fd = 0
-    now = time()
-    self.files['/'] = dict(st_mode=(S_IFDIR | 0o755),
-                           st_ctime=now,
-                           st_mtime=now,
-                           st_atime=now,
-                           st_nlink=2)
-
   @staticmethod
   def _to_bytes(s: Union[str, bytes]):
     if type(s) == bytes:
@@ -54,8 +44,9 @@ class ZeroFS(LoggingMixIn, Operations):
       raise ValueError('Create a bucket named {} to enable zerofs.'.format(
           self.bucket_name))
     self.bucket_id = bucket[0]['bucketId']
-    files = [File(f) for f in self.b2.list_files(self.bucket_id, limit=1000)]
-    self.root = Directory(files)
+    files = [File(f) for f in self.b2.list_files(self.bucket_id, limit=10000)]
+    self.root = Directory('', files)
+    self.fd = 0
 
   def chmod(self, path: str, mode: int):
     """Change the file permissions.
@@ -89,6 +80,14 @@ class ZeroFS(LoggingMixIn, Operations):
       The file descriptor.
     """
     self.root.touch(path, mode)
+    return self.open()
+
+  def open(self, _=None, __=None) -> int:
+    """Increment the file descriptor.
+
+    Returns:
+      A new file descriptor.
+    """
     self.fd += 1
     return self.fd
 
@@ -139,10 +138,6 @@ class ZeroFS(LoggingMixIn, Operations):
     """
     self.root.mkdir(path, mode)
 
-  def open(self, path, flags):
-    self.fd += 1
-    return self.fd
-
   def read(self, path: str, size: int, offset: int, _=None) -> str:
     """Read the file's contents.
 
@@ -155,16 +150,13 @@ class ZeroFS(LoggingMixIn, Operations):
       The queried bytes of the file.
     """
     file_id = self.root.file_at_path(path).file_id
-    print('reading file', file_id)
-    # Special case for empty files
     if len(file_id) == 0:
+      # Special case for empty files
       return self._to_bytes('')
     if not self.cache.has(file_id):
-      print('not in cache, downloading')
       contents = self._to_bytes(self.b2.download_file(file_id))
       self.cache.add(file_id, contents)
     contents = self.cache.get(file_id)
-    print('reading file', contents)
     return contents[offset:offset + size]
 
   def readdir(self, path: str, _) -> List[str]:
@@ -201,14 +193,35 @@ class ZeroFS(LoggingMixIn, Operations):
     if name in file.attrs:
       del file.attrs[name]
 
-  def rename(self, old, new):
-    self.data[new] = self.data.pop(old)
-    self.files[new] = self.files.pop(old)
+  def rename(self, old: str, new: str):
+    """Rename a file by deleting and recreating it.
+
+    Args:
+      old: The old path of the file.
+      new: The new path of the file.
+    """
+    file = self.root.file_at_path(old)
+    if type(file) == Directory:
+      if len(file.files) > 0:
+        return ENOTEMPTY
+      self.rmdir(old)
+      self.mkdir(new, file.st_mode)
+    else:
+      contents = self.readlink(old)
+      self.unlink(old)
+      self.create(new, file.st_mode)
+      self.write(new, contents, 0)
 
   def rmdir(self, path):
-    # with multiple level support, need to raise ENOTEMPTY if contains any files
-    self.files.pop(path)
-    self.files['/']['st_nlink'] -= 1
+    """Remove a directory, if it is not empty.
+
+    Args:
+      path: The path to the directory.
+    """
+    directory = self.root.file_at_path(path)
+    if len(directory.files) > 0:
+      return ENOTEMPTY
+    self.root.rm(path)
 
   def setxattr(self, path: str, name: str, value: str, _, __):
     """Set an attribute for the file.
@@ -221,15 +234,19 @@ class ZeroFS(LoggingMixIn, Operations):
     file = self.root.file_at_path(path)
     file.attrs[name] = value
 
-  def statfs(self, path):
-    return dict(f_bsize=512, f_blocks=4096, f_bavail=2048)
+  def statfs(self, _):
+    """Get file system stats."""
+    return dict(f_bsize=4096, f_blocks=4294967296, f_bavail=4294967296)
 
   def symlink(self, target, source):
-    self.files[target] = dict(st_mode=(S_IFLNK | 0o777),
-                              st_nlink=1,
-                              st_size=len(source))
+    """Symlink from a target to a source.
 
-    self.data[target] = source
+    Args:
+      target: The symlinked file.
+      source: The original file.
+    """
+    # No support for symlinking
+    return EINVAL
 
   def truncate(self, path: str, length: int, _):
     """Truncate or pad the file to the specified length.
@@ -243,17 +260,44 @@ class ZeroFS(LoggingMixIn, Operations):
     content = content.ljust(length, '\x00'.encode('utf-8'))
     file.st_size = length
 
-  def unlink(self, path):
-    self.data.pop(path)
-    self.files.pop(path)
+  def _delete_file(self, path: str):
+    """Delete a file from both the local cache and the object store.
 
-  def utimens(self, path, times=None):
+    Args:
+      path: The path to the file.
+    """
+    file = self.root.file_at_path(path)
+    if self.cache.has(file.file_id):
+      self.cache.delete(file.file_id)
+    if file.st_size > 0:
+      self.b2.delete_file(file.file_id, path.strip('/'))
+
+  def unlink(self, path: str):
+    """Delete a file.
+
+    Args:
+      path: The path to the file.
+    """
+    file = self.root.file_at_path(path)
+    if type(file) == Directory:
+      self.rmdir(path)
+    else:
+      self._delete_file(path)
+      self.root.rm(path)
+
+  def utimens(self, path: str, times: Tuple[int, int] = None):
+    """Update the touch time for the file.
+
+    Args:
+      path: The file to update.
+      times: The modify times to apply.
+    """
+    file = self.root.file_at_path(path)
     now = time()
-    atime, mtime = times if times else (now, now)
-    self.files[path]['st_atime'] = atime
-    self.files[path]['st_mtime'] = mtime
+    mtime, atime = times if times else (now, now)
+    file.update(modify_time=mtime, access_time=atime)
 
-  def write(self, path: str, data: str, offset: str, _) -> int:
+  def write(self, path: str, data: str, offset: str, _=None) -> int:
     """Write data to a file.
 
     Args:
@@ -268,10 +312,7 @@ class ZeroFS(LoggingMixIn, Operations):
     content = self.readlink(path)
 
     # Delete the exisiting version of the file if it exists
-    if self.cache.has(file.file_id):
-      self.cache.delete(file.file_id)
-    if len(content) > 0:
-      self.b2.delete_file(file.file_id, path.strip('/'))
+    self._delete_file(path)
 
     # Write the new bytes
     data = self._to_bytes(data)

@@ -8,7 +8,8 @@ from typing import Dict, List, Union
 class FileBase(ABC):
   """Abstract base class for file-like objects."""
 
-  def __init__(self):
+  def __init__(self, name: str):
+    self.name = name
     self.st_mode = None
     self.st_uid = None
     self.st_gid = None
@@ -32,8 +33,7 @@ class File(FileBase):
     Args:
       file: A dictionary of file metadata from B2.
     """
-    super().__init__()
-    self.name = file.get('fileName', '')
+    super().__init__(file.get('fileName', ''))
     self.file_id = file.get('fileId', '')
     self.st_size = file.get('contentLength', 0)
     self.st_mtime = file.get('uploadTimestamp', time() * 1e3) * 1e-3
@@ -56,7 +56,11 @@ class File(FileBase):
         'st_size': self.st_size
     }
 
-  def update(self, file_id: str = None, file_size: int = None):
+  def update(self,
+             file_id: str = None,
+             file_size: int = None,
+             modify_time: str = None,
+             access_time: int = None):
     """Update the file metadata.
     Automatically updates the last modified time.
 
@@ -68,20 +72,24 @@ class File(FileBase):
       self.file_id = file_id
     if file_size:
       self.st_size = file_size
-    self.mtime = time()
+    if modify_time:
+      self.st_mtime = modify_time
+    if access_time:
+      self.st_atime = access_time
 
 
 class Directory(FileBase):
   """A virtual directory containing subfiles and directories."""
 
-  def __init__(self, files: List[File], mode=0o755):
+  def __init__(self, name: str, files: List[File], mode=0o755):
     """Initialize with a list of files in this directory.
 
     Args:
+      name: The name of the directory.
       files: A list with file metadata for files in the directory.
       mode: The permissions to set.
     """
-    super().__init__()
+    super().__init__(name)
 
     children = defaultdict(list)
     for file in files:
@@ -98,7 +106,7 @@ class Directory(FileBase):
 
     self.files = {file.name: file for file in children['']}
     del children['']
-    self.files.update({k: Directory(v) for k, v in children.items()})
+    self.files.update({k: Directory(k, v) for k, v in children.items()})
 
     self.st_mode = S_IFDIR | mode
     self.st_atime = time()
@@ -139,6 +147,24 @@ class Directory(FileBase):
       path = path.strip('/').split('/')
     return path
 
+  def file_nesting(self, path: Union[str, List[str]]) -> List['Directory']:
+    """Get the nesting directories of a file or directory.
+
+    Args:
+      path: The path to get the nesting in.
+
+    Returns:
+      A list of directories indicating the nested structure of the path.
+    """
+    path = self._to_path_list(path)
+    if path[0] == '':
+      return [self]
+    file = self.files[path[0]]
+    if len(path) == 1:
+      # The file is in the root directory
+      return [self, file]
+    return [self] + file.file_nesting(path[1:])
+
   def file_at_path(self, path: Union[str, List[str]]) -> File:
     """Get the file given a path relative to this directory.
 
@@ -148,15 +174,7 @@ class Directory(FileBase):
     Returns:
       The file object at the path if it exists.
     """
-    path = self._to_path_list(path)
-    if path[0] == '':
-      return self
-    file = self.files[path[0]]
-    if len(path) == 1:
-      return file
-    if type(file) == Directory:
-      return self.files[path[0]].file_at_path(path[1:])
-    raise KeyError('No such directory: {}'.format(path[0]))
+    return self.file_nesting(path)[-1]
 
   def file_exists(self, path: str) -> bool:
     """
@@ -202,7 +220,19 @@ class Directory(FileBase):
     node = self._find_node(path[:-1])
     if path[-1] in node.files:
       raise KeyError('Directory {} already exists'.format(path))
-    node.files[path[-1]] = Directory([], mode=mode)
+    node.files[path[-1]] = Directory(path[-1], [], mode=mode)
+
+  def rm(self, path: Union[str, List[str]]):
+    """Remove a file or directory.
+
+    Args:
+      name: The path to the file.
+    """
+    nesting = self.file_nesting(path)
+    if len(nesting) < 2:
+      raise ValueError('Cannot rm the root directory')
+    parent_dir, file = nesting[-2:]
+    del parent_dir.files[file.name]
 
   def touch(self, path: Union[str, List[str]], mode: int):
     """Create an empty file.
