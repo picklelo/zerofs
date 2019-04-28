@@ -1,0 +1,43 @@
+#!/usr/bin/env python3
+"""Main script to launch the ZeroFS file system."""
+
+import argparse
+import logging
+import os
+
+from fuse import FUSE
+
+from zerofs.fs import ZeroFS
+
+
+if __name__ == '__main__':
+  parser = argparse.ArgumentParser()
+  parser.add_argument('mount')
+  parser.add_argument('--bucket',
+                      type=str,
+                      required=True,
+                      help='The B2 bucket to mount')
+  parser.add_argument('--background',
+                      action='store_true',
+                      help='Run in the background')
+  parser.add_argument('--cache-dir',
+                      type=str,
+                      help='Cache directory to use',
+                      default='~/.zerofs')
+  parser.add_argument('--cache-size',
+                      type=int,
+                      help='Disk cache size in MB',
+                      default=5000)
+  parser.add_argument('--verbose', action='store_true', help='Log debug info')
+  args = parser.parse_args()
+
+  if args.verbose:
+    logging.basicConfig(level=logging.DEBUG)
+
+  cache_dir = os.path.expanduser(args.cache_dir)
+  fuse = FUSE(ZeroFS(args.bucket,
+                     cache_dir=cache_dir,
+                     cache_size=args.cache_size),
+              args.mount,
+              foreground=not args.background,
+              allow_other=True)
