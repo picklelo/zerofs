@@ -1,6 +1,7 @@
 from collections import defaultdict
 from errno import ENOATTR, ENOENT, ENOTEMPTY, EINVAL
 from stat import S_IFDIR, S_IFLNK
+from threading import Lock
 from time import time
 from typing import Dict, List, Tuple, Union
 
@@ -25,6 +26,7 @@ class ZeroFS(LoggingMixIn, Operations):
     self.bucket_name = bucket_name
     self.cache = Cache(cache_dir, cache_size)
     self.b2 = B2()
+    self.file_locks = defaultdict(Lock)
     self._load_dir_tree()
 
   @staticmethod
@@ -113,7 +115,7 @@ class ZeroFS(LoggingMixIn, Operations):
     file = self.root.file_at_path(path)
     if name in file.attrs:
       return file.attrs[name]
-    raise FuseOSError(ENOATTR)
+    return ''.encode('utf-8')
 
   def listxattr(self, path: str) -> List[str]:
     """
@@ -150,11 +152,13 @@ class ZeroFS(LoggingMixIn, Operations):
     if len(file_id) == 0:
       # Special case for empty files
       return self._to_bytes('')
-    if not self.cache.has(file_id):
-      contents = self._to_bytes(self.b2.download_file(file_id))
-      self.cache.add(file_id, contents)
-    contents = self.cache.get(file_id)
-    return contents[offset:offset + size]
+
+    with self.file_locks[file_id]:
+      if not self.cache.has(file_id):
+        contents = self._to_bytes(self.b2.download_file(file_id))
+        self.cache.add(file_id, contents)
+      contents = self.cache.get(file_id)
+      return contents[offset:offset + size if size else None]
 
   def readdir(self, path: str, _) -> List[str]:
     """Read the entries in the directory.
@@ -177,7 +181,7 @@ class ZeroFS(LoggingMixIn, Operations):
     Returns:
       The file's contents.
     """
-    return self.read(path, -1, 0)
+    return self.read(path, None, 0)
 
   def removexattr(self, path: str, name: str):
     """Remove an attribute from a file.
@@ -308,16 +312,17 @@ class ZeroFS(LoggingMixIn, Operations):
     file = self.root.file_at_path(path)
     content = self.readlink(path)
 
-    # Delete the exisiting version of the file if it exists
-    self._delete_file(path)
+    with self.file_locks[file.file_id]:
+      # Delete the exisiting version of the file if it exists
+      self._delete_file(path)
 
-    # Write the new bytes
-    data = self._to_bytes(data)
-    content = (content[:offset].ljust(offset, self._to_bytes('\x00')) + data +
-               content[offset + len(data):])
+      # Write the new bytes
+      data = self._to_bytes(data)
+      content = (content[:offset].ljust(offset, self._to_bytes('\x00')) + data +
+                content[offset + len(data):])
 
-    # Upload to the object store and save to cache
-    response = self.b2.upload_file(self.bucket_id, path.strip('/'), content)
-    file.update(file_id=response['fileId'], file_size=len(content))
-    self.cache.add(file.file_id, content)
-    return len(data)
+      # Upload to the object store and save to cache
+      response = self.b2.upload_file(self.bucket_id, path.strip('/'), content)
+      file.update(file_id=response['fileId'], file_size=len(content))
+      self.cache.add(file.file_id, content)
+      return len(data)
