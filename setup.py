@@ -7,7 +7,7 @@ def read(file_name):
 
 
 setup(name='zerofs',
-      version='0.1.1',
+      version='0.1.2',
       description='Transparant filesystem backed by Backblaze B2 object store',
       long_description=read('README.md'),
       url='https://github.com/picklelo/zerofs',
@@ -20,4 +20,5 @@ setup(name='zerofs',
       ],
       keywords='backblaze b2 zero fs filesystem',
       packages=['zerofs'],
+      scripts=['bin/zerofs'],
       install_requires=['backblazeb2', 'fusepy'])

@@ -1,14 +1,11 @@
-import logging
-import os
-
 from collections import defaultdict
-from errno import ENOENT, ENOTEMPTY, EINVAL
+from errno import ENOATTR, ENOENT, ENOTEMPTY, EINVAL
 from stat import S_IFDIR, S_IFLNK
 from time import time
 from typing import Dict, List, Tuple, Union
 
 from b2py import B2, utils as b2_utils
-from fuse import FUSE, FuseOSError, Operations, LoggingMixIn
+from fuse import FuseOSError, Operations, LoggingMixIn
 
 from zerofs.cache import Cache
 from zerofs.file import Directory, File
@@ -116,7 +113,7 @@ class ZeroFS(LoggingMixIn, Operations):
     file = self.root.file_at_path(path)
     if name in file.attrs:
       return file.attrs[name]
-    return ''
+    raise FuseOSError(ENOATTR)
 
   def listxattr(self, path: str) -> List[str]:
     """
@@ -246,7 +243,7 @@ class ZeroFS(LoggingMixIn, Operations):
       source: The original file.
     """
     # No support for symlinking
-    return EINVAL
+    return FuseOSError(EINVAL)
 
   def truncate(self, path: str, length: int, _):
     """Truncate or pad the file to the specified length.
@@ -324,37 +321,3 @@ class ZeroFS(LoggingMixIn, Operations):
     file.update(file_id=response['fileId'], file_size=len(content))
     self.cache.add(file.file_id, content)
     return len(data)
-
-
-if __name__ == '__main__':
-  import argparse
-  parser = argparse.ArgumentParser()
-  parser.add_argument('mount')
-  parser.add_argument('--bucket',
-                      type=str,
-                      required=True,
-                      help='The B2 bucket to mount')
-  parser.add_argument('--background',
-                      action='store_true',
-                      help='Run in the background')
-  parser.add_argument('--cache-dir',
-                      type=str,
-                      help='Cache directory to use',
-                      default='~/.zerofs')
-  parser.add_argument('--cache-size',
-                      type=int,
-                      help='Disk cache size in MB',
-                      default=5000)
-  parser.add_argument('--verbose', action='store_true', help='Log debug info')
-  args = parser.parse_args()
-
-  if args.verbose:
-    logging.basicConfig(level=logging.DEBUG)
-
-  cache_dir = os.path.expanduser(args.cache_dir)
-  fuse = FUSE(ZeroFS(args.bucket,
-                     cache_dir=cache_dir,
-                     cache_size=args.cache_size),
-              args.mount,
-              foreground=not args.background,
-              allow_other=True)
