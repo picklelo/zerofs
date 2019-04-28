@@ -16,7 +16,7 @@ class FileBase(ABC):
 
   def chmod(self, mode):
     self.st_mode &= 0o770000
-    self.st_mode != mode
+    self.st_mode |= mode
 
   def chown(self, uid, gid):
     self.st_uid = uid
@@ -33,13 +33,14 @@ class File(FileBase):
       file: A dictionary of file metadata from B2.
     """
     super().__init__()
-    self.name = file['fileName']
-    self.file_id = file['fileId']
-    self.st_size = file['contentLength']
-    self.st_mtime = file['uploadTimestamp'] * 1e-3
+    self.name = file.get('fileName', '')
+    self.file_id = file.get('fileId', '')
+    self.st_size = file.get('contentLength', 0)
+    self.st_mtime = file.get('uploadTimestamp', time() * 1e3) * 1e-3
     self.st_ctime = self.st_mtime
     self.st_atime = self.st_mtime
     self.st_mode = S_IFREG | 0o755
+    self.st_nlink = 1
 
   def __repr__(self):
     return '<File {}>'.format(self.name)
@@ -51,19 +52,34 @@ class File(FileBase):
         'st_ctime': self.st_ctime,
         'st_mtime': self.st_mtime,
         'st_atime': self.st_atime,
-        'st_nlink': 1,
+        'st_nlink': self.st_nlink,
         'st_size': self.st_size
     }
+
+  def update(self, file_id: str = None, file_size: int = None):
+    """Update the file metadata.
+    Automatically updates the last modified time.
+
+    Args:
+      file_id: The new file id.
+      file_size: The new file size.
+    """
+    if file_id:
+      self.file_id = file_id
+    if file_size:
+      self.st_size = file_size
+    self.mtime = time()
 
 
 class Directory(FileBase):
   """A virtual directory containing subfiles and directories."""
 
-  def __init__(self, files: List[File]):
+  def __init__(self, files: List[File], mode=0o755):
     """Initialize with a list of files in this directory.
 
     Args:
       files: A list with file metadata for files in the directory.
+      mode: The permissions to set.
     """
     super().__init__()
 
@@ -84,13 +100,20 @@ class Directory(FileBase):
     del children['']
     self.files.update({k: Directory(v) for k, v in children.items()})
 
-    self.st_mode = S_IFDIR | 0o755
+    self.st_mode = S_IFDIR | mode
+    self.st_atime = time()
 
   @property
   def st_mtime(self) -> float:
+    """The last modified time of the directory."""
     if len(self.files) == 0:
-      return time()
+      return self.st_atime
     return max([f.st_mtime for f in self.files.values()])
+
+  @property
+  def st_nlink(self) -> int:
+    """Number of hard links pointing to the directory."""
+    return 2 + len([f for f in self.files if type(f) == Directory])
 
   @property
   def metadata(self) -> Dict:
@@ -99,8 +122,22 @@ class Directory(FileBase):
         'st_ctime': self.st_mtime,
         'st_mtime': self.st_mtime,
         'st_atime': self.st_mtime,
-        'st_nlink': 2
+        'st_nlink': self.st_nlink
     }
+
+  @staticmethod
+  def _to_path_list(path: Union[str, List[str]]) -> List[str]:
+    """Combine a path to a path list.
+
+    Args:
+      path: The path to convert (can be a string or a list)
+
+    Returns:
+      A list that can be used to find the node in the tree.
+    """
+    if type(path) == str:
+      path = path.strip('/').split('/')
+    return path
 
   def file_at_path(self, path: Union[str, List[str]]) -> File:
     """Get the file given a path relative to this directory.
@@ -111,8 +148,7 @@ class Directory(FileBase):
     Returns:
       The file object at the path if it exists.
     """
-    if type(path) == str:
-      path = path.strip('/').split('/')
+    path = self._to_path_list(path)
     if path[0] == '':
       return self
     file = self.files[path[0]]
@@ -135,3 +171,47 @@ class Directory(FileBase):
       return True
     except KeyError:
       return False
+
+  def _find_node(self, path: Union[str, List[str]]) -> FileBase:
+    """Find the node in the directory tree.
+
+    Args:
+      path: The path to the node to find.
+
+    Returns:
+      The found node.
+    """
+    path = self._to_path_list(path)
+    if len(path) == 0:
+      return self
+
+    if (path[0] not in self.files or type(self.files[path[0]]) != Directory):
+      raise KeyError('Cannot find node, directory {} does not exist'.format(
+          path[0]))
+
+    return self.files[path[0]]._find_node(path[1:])
+
+  def mkdir(self, path: Union[str, List[str]], mode: int):
+    """Create a subdirectory.
+
+    Args:
+      path: The path to the directory to create.
+      mode: The directory permissions.
+    """
+    path = self._to_path_list(path)
+    node = self._find_node(path[:-1])
+    if path[-1] in node.files:
+      raise KeyError('Directory {} already exists'.format(path))
+    node.files[path[-1]] = Directory([], mode=mode)
+
+  def touch(self, path: Union[str, List[str]], mode: int):
+    """Create an empty file.
+
+    Args:
+      path: The path to the file to create.
+      mode: The file permissions.
+    """
+    path = self._to_path_list(path)
+    node = self._find_node(path[:-1])
+    if path[-1] not in node.files:
+      node.files[path[-1]] = File({'fileName': path[-1]})
