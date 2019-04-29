@@ -13,7 +13,6 @@ from zerofs.cache import Cache
 from zerofs.file import Directory, File
 from zerofs.task_queue import TaskQueue
 
-
 logger = getLogger('zerofs')
 
 

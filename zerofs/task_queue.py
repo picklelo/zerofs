@@ -5,7 +5,6 @@ from time import sleep, time
 from threading import Thread, Lock
 from typing import Callable
 
-
 logger = getLogger('task_queue')
 
 
