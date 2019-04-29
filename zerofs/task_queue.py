@@ -45,7 +45,7 @@ class TaskQueue:
           continue
 
       # Sleep until we are ready to run the code
-      time_to_sleep = min(1, time_to_run - time())
+      time_to_sleep = max(1, time_to_run - time())
       logger.info('Time to sleep %s', time_to_sleep)
       if time_to_sleep > 0:
         sleep(time_to_sleep)

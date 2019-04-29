@@ -8,7 +8,6 @@ from typing import Dict, List, Tuple, Union
 
 from b2py import B2, utils as b2_utils
 from fuse import FuseOSError, Operations, LoggingMixIn
-
 from zerofs.cache import Cache
 from zerofs.file import Directory, File
 from zerofs.task_queue import TaskQueue
@@ -100,6 +99,8 @@ class ZeroFS(LoggingMixIn, Operations):
     logger.info('create %s %s', path, mode)
     file = self.root.touch(path, mode)
     self.cache.add(file.file_id, self._to_bytes(''))
+    self.task_queue.submit_task(file.file_id, self.upload_delay,
+                                self._upload_file, path)
     return self.open()
 
   def open(self, _=None, __=None) -> int:
@@ -304,10 +305,13 @@ class ZeroFS(LoggingMixIn, Operations):
       path: The path to the file.
     """
     file = self.root.file_at_path(path)
-    if self.cache.has(file.file_id):
-      self.cache.delete(file.file_id)
-    if file.st_size > 0:
-      self.b2.delete_file(file.file_id, path.strip('/'))
+    with self.file_locks[file.file_id]:
+      if self.cache.has(file.file_id):
+        logger.info('Deleting from cache %s', file.file_id)
+        self.cache.delete(file.file_id)
+      if not file.is_local_file:
+        logger.info('Deleting from object store %s', file.file_id)
+        self.b2.delete_file(file.file_id, path.strip('/'))
 
   def unlink(self, path: str):
     """Delete a file.
@@ -348,10 +352,10 @@ class ZeroFS(LoggingMixIn, Operations):
 
     with self.file_locks[file.file_id]:
       logger.info('Uploading file %s', len(content))
+      # Delete the exisiting version of the file if it exists
+      self._delete_file(path)
       response = self.b2.upload_file(self.bucket_id, path.strip('/'), content)
-      logger.info('Upload complete')
-
-      logger.info('Updating cache')
+      logger.info('Upload complete, updating cache')
       self.cache.delete(file.file_id)
       file.update(file_id=response['fileId'], file_size=len(content))
       self.cache.add(file.file_id, content)
@@ -372,9 +376,6 @@ class ZeroFS(LoggingMixIn, Operations):
     content = self.readlink(path)
 
     with self.file_locks[file.file_id]:
-      # Delete the exisiting version of the file if it exists
-      # self._delete_file(path)
-
       # Write the new bytes
       data = self._to_bytes(data)
       content = (content[:offset].ljust(offset, self._to_bytes('\x00')) + data +

@@ -3,7 +3,7 @@ from collections import defaultdict
 from stat import S_IFDIR, S_IFREG
 from time import time
 from typing import Dict, List, Union
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 
 class FileBase(ABC):
@@ -35,7 +35,7 @@ class File(FileBase):
       file: A dictionary of file metadata from B2.
     """
     super().__init__(file.get('fileName', ''))
-    self.file_id = file.get('fileId', '')
+    self.file_id = file.get('fileId', str(uuid4()))
     self.st_size = file.get('contentLength', 0)
     self.st_mtime = file.get('uploadTimestamp', time() * 1e3) * 1e-3
     self.st_ctime = self.st_mtime
@@ -45,6 +45,15 @@ class File(FileBase):
 
   def __repr__(self):
     return '<File {}>'.format(self.name)
+
+  @property
+  def is_local_file(self) -> bool:
+    """Whether this file is local only, and not on the server."""
+    try:
+      UUID(self.file_id)
+      return True
+    except:
+      return False
 
   @property
   def metadata(self) -> Dict:
@@ -244,6 +253,6 @@ class Directory(FileBase):
     """
     path = self._to_path_list(path)
     node = self._find_node(path[:-1])
-    file = File({'fileId': str(uuid4()), 'fileName': path[-1]})
+    file = File({'fileName': path[-1]})
     node.files[path[-1]] = file
     return file
