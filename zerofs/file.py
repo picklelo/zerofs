@@ -3,6 +3,7 @@ from collections import defaultdict
 from stat import S_IFDIR, S_IFREG
 from time import time
 from typing import Dict, List, Union
+from uuid import uuid4
 
 
 class FileBase(ABC):
@@ -234,7 +235,7 @@ class Directory(FileBase):
     parent_dir, file = nesting[-2:]
     del parent_dir.files[file.name]
 
-  def touch(self, path: Union[str, List[str]], mode: int):
+  def touch(self, path: Union[str, List[str]], mode: int) -> File:
     """Create an empty file.
 
     Args:
@@ -243,5 +244,6 @@ class Directory(FileBase):
     """
     path = self._to_path_list(path)
     node = self._find_node(path[:-1])
-    if path[-1] not in node.files:
-      node.files[path[-1]] = File({'fileName': path[-1]})
+    file = File({'fileId': str(uuid4()), 'fileName': path[-1]})
+    node.files[path[-1]] = file
+    return file

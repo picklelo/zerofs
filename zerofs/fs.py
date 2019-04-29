@@ -1,5 +1,6 @@
 from collections import defaultdict
 from errno import ENOATTR, ENOENT, ENOTEMPTY, EINVAL
+from logging import getLogger
 from stat import S_IFDIR, S_IFLNK
 from threading import Lock
 from time import time
@@ -10,24 +11,40 @@ from fuse import FuseOSError, Operations, LoggingMixIn
 
 from zerofs.cache import Cache
 from zerofs.file import Directory, File
+from zerofs.task_queue import TaskQueue
+
+logger = getLogger('zerofs')
 
 
 class ZeroFS(LoggingMixIn, Operations):
   """Virtual filesystem backed by the B2 object store."""
 
-  def __init__(self, bucket_name: str, cache_dir: str, cache_size: int):
+  def __init__(self, bucket_name: str, cache_dir: str, cache_size: int,
+               upload_delay: float, num_workers: int):
     """Initialize the FUSE filesystem.
 
     Args:
       bucket_name: The name of the remote bucket to mount.
       cache_dir: The directory to cache files to.
       cache_size: The cache size in MB for saving files on local disk.
+      upload_delay: Delay in seconds after writing before uploading to cloud.
+      num_workers: Number of background thread workers.
     """
+    logger.info('Initializing zerofs from bucket {}'.format(bucket_name))
     self.bucket_name = bucket_name
     self.cache = Cache(cache_dir, cache_size)
     self.b2 = B2()
     self.file_locks = defaultdict(Lock)
+    self.upload_delay = upload_delay
+
+    # Load the directory tree
+    logger.info('Loading directory tree')
     self._load_dir_tree()
+
+    # Start the task queue
+    logger.info('Starting task queue')
+    self.task_queue = TaskQueue(num_workers)
+    self.task_queue.start()
 
   @staticmethod
   def _to_bytes(s: Union[str, bytes]):
@@ -54,6 +71,7 @@ class ZeroFS(LoggingMixIn, Operations):
       path: The path to the file.
       mode: The new file mode permissions
     """
+    logger.info('chmod %s %s', path, mode)
     file = self.root.file_at_path(path)
     file.chmod(mode)
 
@@ -65,6 +83,7 @@ class ZeroFS(LoggingMixIn, Operations):
       uid: The user owner id.
       gid: The group owner id.
     """
+    logger.info('chown %s %s %s', path, uid, gid)
     file = self.root.file_at_path(path)
     file.chown(uid, gid)
 
@@ -78,7 +97,9 @@ class ZeroFS(LoggingMixIn, Operations):
     Returns:
       The file descriptor.
     """
-    self.root.touch(path, mode)
+    logger.info('create %s %s', path, mode)
+    file = self.root.touch(path, mode)
+    self.cache.add(file.file_id, self._to_bytes(''))
     return self.open()
 
   def open(self, _=None, __=None) -> int:
@@ -135,6 +156,7 @@ class ZeroFS(LoggingMixIn, Operations):
       path: The path to create.
       mode: The directory permissions.
     """
+    logger.info('mkdir %s %s', path, mode)
     self.root.mkdir(path, mode)
 
   def read(self, path: str, size: int, offset: int, _=None) -> str:
@@ -148,17 +170,26 @@ class ZeroFS(LoggingMixIn, Operations):
     Returns:
       The queried bytes of the file.
     """
-    file_id = self.root.file_at_path(path).file_id
-    if len(file_id) == 0:
+    logger.info('read %s %s %s', path, offset, size)
+    file = self.root.file_at_path(path)
+    logger.info('Found file %s', file.file_id)
+
+    if file.st_size == 0:
       # Special case for empty files
+      logger.info('File size %s', 0)
       return self._to_bytes('')
 
-    with self.file_locks[file_id]:
-      if not self.cache.has(file_id):
-        contents = self._to_bytes(self.b2.download_file(file_id))
-        self.cache.add(file_id, contents)
-      contents = self.cache.get(file_id)
-      return contents[offset:offset + size if size else None]
+    with self.file_locks[file.file_id]:
+      # Download from the object store if the file is not cached
+      if not self.cache.has(file.file_id):
+        logger.info('File not in cache, downloading from store')
+        contents = self._to_bytes(self.b2.download_file(file.file_id))
+        logger.info('File downloaded %s', len(contents))
+        self.cache.add(file.file_id, contents)
+
+      content = self.cache.get(file.file_id)
+      logger.info('File size %s', len(content))
+      return content[offset:offset + size if size else None]
 
   def readdir(self, path: str, _) -> List[str]:
     """Read the entries in the directory.
@@ -169,6 +200,7 @@ class ZeroFS(LoggingMixIn, Operations):
     Returns:
       The names of the entries (files and subdirectories).
     """
+    logger.info('readdir %s', path)
     dir = self.root.file_at_path(path)
     return ['.', '..'] + [f for f in dir.files]
 
@@ -181,6 +213,7 @@ class ZeroFS(LoggingMixIn, Operations):
     Returns:
       The file's contents.
     """
+    logger.info('readlink %s', path)
     return self.read(path, None, 0)
 
   def removexattr(self, path: str, name: str):
@@ -201,9 +234,11 @@ class ZeroFS(LoggingMixIn, Operations):
       old: The old path of the file.
       new: The new path of the file.
     """
+    logger.info('rename %s %s', old, new)
     file = self.root.file_at_path(old)
     if type(file) == Directory:
       if len(file.files) > 0:
+        logger.info('Directory not empty')
         return ENOTEMPTY
       self.rmdir(old)
       self.mkdir(new, file.st_mode)
@@ -219,6 +254,7 @@ class ZeroFS(LoggingMixIn, Operations):
     Args:
       path: The path to the directory.
     """
+    logger.info('rmdir %s', path)
     directory = self.root.file_at_path(path)
     if len(directory.files) > 0:
       return ENOTEMPTY
@@ -279,6 +315,7 @@ class ZeroFS(LoggingMixIn, Operations):
     Args:
       path: The path to the file.
     """
+    logger.info('unlink %s', path)
     file = self.root.file_at_path(path)
     if type(file) == Directory:
       self.rmdir(path)
@@ -298,6 +335,27 @@ class ZeroFS(LoggingMixIn, Operations):
     mtime, atime = times if times else (now, now)
     file.update(modify_time=mtime, access_time=atime)
 
+  def _upload_file(self, path: str) -> str:
+    """Upload a file to the object store.
+
+    Args:
+      path: The path of the file to upload.
+
+    """
+    logger.info('upload %s', path)
+    file = self.root.file_at_path(path)
+    content = self.cache.get(file.file_id)
+
+    with self.file_locks[file.file_id]:
+      logger.info('Uploading file %s', len(content))
+      response = self.b2.upload_file(self.bucket_id, path.strip('/'), content)
+      logger.info('Upload complete')
+
+      logger.info('Updating cache')
+      self.cache.delete(file.file_id)
+      file.update(file_id=response['fileId'], file_size=len(content))
+      self.cache.add(file.file_id, content)
+
   def write(self, path: str, data: str, offset: str, _=None) -> int:
     """Write data to a file.
 
@@ -309,20 +367,26 @@ class ZeroFS(LoggingMixIn, Operations):
     Returns:
       The number of bytes written.
     """
+    logger.info('write %s %s %s', path, offset, len(data))
     file = self.root.file_at_path(path)
     content = self.readlink(path)
 
     with self.file_locks[file.file_id]:
       # Delete the exisiting version of the file if it exists
-      self._delete_file(path)
+      # self._delete_file(path)
 
       # Write the new bytes
       data = self._to_bytes(data)
       content = (content[:offset].ljust(offset, self._to_bytes('\x00')) + data +
-                content[offset + len(data):])
+                 content[offset + len(data):])
 
-      # Upload to the object store and save to cache
-      response = self.b2.upload_file(self.bucket_id, path.strip('/'), content)
-      file.update(file_id=response['fileId'], file_size=len(content))
+      # Immediately save locally
+      logger.info('Saving to cache %s %s', file.file_id, len(content))
+      file.update(file_size=len(content))
       self.cache.add(file.file_id, content)
+
+      # Submit task to upload to object store
+      self.task_queue.submit_task(file.file_id, self.upload_delay,
+                                  self._upload_file, path)
+
       return len(data)

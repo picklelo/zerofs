@@ -28,16 +28,26 @@ if __name__ == '__main__':
                       type=int,
                       help='Disk cache size in MB',
                       default=5000)
+  parser.add_argument('--num_workers',
+                      type=int,
+                      help='Num thread workers for uploads',
+                      default=10)
+  parser.add_argument('--upload_delay',
+                      type=float,
+                      help='Delay in seconds before writing to object store',
+                      default=5.0)
   parser.add_argument('--verbose', action='store_true', help='Log debug info')
   args = parser.parse_args()
 
   if args.verbose:
-    logging.basicConfig(level=logging.DEBUG)
+    logging.basicConfig(level=logging.INFO)
 
   cache_dir = os.path.expanduser(args.cache_dir)
   fuse = FUSE(ZeroFS(args.bucket,
                      cache_dir=cache_dir,
-                     cache_size=args.cache_size),
+                     cache_size=args.cache_size,
+                     upload_delay=args.upload_delay,
+                     num_workers=args.num_workers),
               args.mount,
               foreground=not args.background,
               allow_other=True)
