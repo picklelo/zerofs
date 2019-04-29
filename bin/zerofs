@@ -51,3 +51,8 @@ if __name__ == '__main__':
               args.mount,
               foreground=not args.background,
               allow_other=True)
+
+20160530_132056.jpg \
+20160717_141016.jpg \
+20160717_181719.jpg \
+20161120_202756.jpg \
