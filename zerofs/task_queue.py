@@ -5,6 +5,7 @@ from time import sleep, time
 from threading import Thread, Lock
 from typing import Callable
 
+
 logger = getLogger('task_queue')
 
 
@@ -32,7 +33,8 @@ class TaskQueue:
     """
     logger.info('Initialized task worker %s', i)
     while True:
-      time_to_run, task_id, task_version, fn, args, kwargs = self.queue.get()
+      task = self.queue.get()
+      time_to_run, task_id, task_version, fn, args, kwargs = task
       logger.info('Received task %s', task_id)
       logger.info('Task queue size %s', self.queue.qsize())
 
@@ -57,13 +59,20 @@ class TaskQueue:
           continue
 
       # Run the function, retry on failures
+      finished = False
       for backoff in [2**i for i in range(num_retries + 1)]:
         try:
           fn(*args, **kwargs)
+          finished = True
           break
         except:
           logger.info('An error occurred, sleeping %s', backoff)
           sleep(backoff)
+
+      # Put the task back in the queue if we still failed
+      if not finished:
+        logger.info('Task failed, reinserting into queue %s', task_id)
+        self.queue.put(task)
 
       self.queue.task_done()
 

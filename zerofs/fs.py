@@ -1,5 +1,5 @@
 from collections import defaultdict
-from errno import ENOATTR, ENOENT, ENOTEMPTY, EINVAL
+from errno import ENOENT, ENOTEMPTY, EINVAL
 from logging import getLogger
 from stat import S_IFDIR, S_IFLNK
 from threading import Lock
@@ -12,6 +12,7 @@ from fuse import FuseOSError, Operations, LoggingMixIn
 from zerofs.cache import Cache
 from zerofs.file import Directory, File
 from zerofs.task_queue import TaskQueue
+
 
 logger = getLogger('zerofs')
 
