@@ -360,8 +360,8 @@ class ZeroFS(LoggingMixIn, Operations):
     self._delete_file(path)
 
     with self.file_locks[file.file_id]:
-      logger.info('Saving to cache')
       file.update(file_id=response['fileId'], file_size=len(content))
+      logger.info('Saving to cache %s', file.file_id)
       self.cache.add(file.file_id, content)
 
   def write(self, path: str, data: str, offset: str, _=None) -> int:
