@@ -64,8 +64,9 @@ class TaskQueue:
           fn(*args, **kwargs)
           finished = True
           break
-        except:
-          logger.info('An error occurred, sleeping %s', backoff)
+        except Exception as e:
+          logger.info('An error occurred: %s', str(e))
+          logger.info('Sleeping %s', backoff)
           sleep(backoff)
 
       # Put the task back in the queue if we still failed

@@ -188,9 +188,9 @@ class ZeroFS(LoggingMixIn, Operations):
         logger.info('File downloaded %s', len(contents))
         self.cache.add(file.file_id, contents)
 
-      content = self.cache.get(file.file_id)
-      logger.info('File size %s', len(content))
-      return content[offset:offset + size if size else None]
+      content = self.cache.get(file.file_id, offset, size)
+      logger.info('Reading bytes %s', len(content))
+      return content
 
   def readdir(self, path: str, _) -> List[str]:
     """Read the entries in the directory.
@@ -348,15 +348,19 @@ class ZeroFS(LoggingMixIn, Operations):
     """
     logger.info('upload %s', path)
     file = self.root.file_at_path(path)
+
+    # Delete the exisiting version of the file if it exists
     content = self.cache.get(file.file_id)
 
     with self.file_locks[file.file_id]:
       logger.info('Uploading file %s', len(content))
-      # Delete the exisiting version of the file if it exists
-      self._delete_file(path)
       response = self.b2.upload_file(self.bucket_id, path.strip('/'), content)
       logger.info('Upload complete, updating cache')
-      self.cache.delete(file.file_id)
+
+    self._delete_file(path)
+
+    with self.file_locks[file.file_id]:
+      logger.info('Saving to cache')
       file.update(file_id=response['fileId'], file_size=len(content))
       self.cache.add(file.file_id, content)
 
@@ -373,21 +377,19 @@ class ZeroFS(LoggingMixIn, Operations):
     """
     logger.info('write %s %s %s', path, offset, len(data))
     file = self.root.file_at_path(path)
-    content = self.readlink(path)
 
     with self.file_locks[file.file_id]:
       # Write the new bytes
       data = self._to_bytes(data)
-      content = (content[:offset].ljust(offset, self._to_bytes('\x00')) + data +
-                 content[offset + len(data):])
 
       # Immediately save locally
-      logger.info('Saving to cache %s %s', file.file_id, len(content))
-      file.update(file_size=len(content))
-      self.cache.add(file.file_id, content)
+      logger.info('Writing to cache %s %s', file.file_id, len(data))
+      num_bytes = self.cache.update(file.file_id, data, offset)
+      file_size = self.cache.file_size(file.file_id)
+      file.update(file_size=file_size)
 
       # Submit task to upload to object store
       self.task_queue.submit_task(file.file_id, self.upload_delay,
                                   self._upload_file, path)
 
-      return len(data)
+      return num_bytes
