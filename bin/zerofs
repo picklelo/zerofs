@@ -28,6 +28,7 @@ if __name__ == '__main__':
                       type=int,
                       help='Disk cache size in MB',
                       default=5000)
+  parser.add_argument('--log-file', type=str, help='File to log to', default='')
   parser.add_argument('--num_workers',
                       type=int,
                       help='Num thread workers for uploads',
@@ -41,6 +42,9 @@ if __name__ == '__main__':
 
   if args.verbose:
     logging.basicConfig(level=logging.INFO)
+
+  if args.log_file:
+    logging.basicConfig(filename=args.log_file, filemode='w', level=logging.INFO)
 
   cache_dir = os.path.expanduser(args.cache_dir)
   fuse = FUSE(ZeroFS(args.bucket,

@@ -34,7 +34,7 @@ class TaskQueue:
     while True:
       task = self.queue.get()
       time_to_run, task_id, task_version, fn, args, kwargs = task
-      logger.info('Received task %s', task_id)
+      logger.info('Worker received task %s', task_id)
       logger.info('Task queue size %s', self.queue.qsize())
 
       # If there is a newer version of the task, skip this one

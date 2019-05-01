@@ -40,9 +40,12 @@ class ZeroFS(LoggingMixIn, Operations):
     logger.info('Loading directory tree')
     self._load_dir_tree()
 
-    # Start the task queue
+    # Initialize the task queue
     logger.info('Starting task queue')
     self.task_queue = TaskQueue(num_workers)
+
+  def init(self, _):
+    """Start the background task queue."""
     self.task_queue.start()
 
   @staticmethod
