@@ -54,6 +54,34 @@ class ZeroFS(LoggingMixIn, Operations):
       return s
     return s.encode('utf-8')
 
+  def get_files(self) -> List[File]:
+    """Get all the files in the bucket.
+
+    Returns:
+      The complete list of files in the bucket.
+    """
+    logger.info('getting files...')
+    files = []
+    start_file_id = start_file_name = None
+    limit = 10000
+
+    while True:
+      file_list = [
+          File(f) for f in self.b2.list_files(
+              self.bucket_id,
+              start_file_id=start_file_id,
+              start_file_name=start_file_name,
+              limit=limit)
+      ]
+      files += file_list
+
+      if len(file_list) < limit:
+        break
+      start_file_id = file_list[-1].file_id
+      start_file_name = file_list[-1].name
+
+    return files
+
   def _load_dir_tree(self):
     """Load the directory structure into memory."""
     buckets = self.b2.list_buckets()
@@ -62,8 +90,7 @@ class ZeroFS(LoggingMixIn, Operations):
       raise ValueError('Create a bucket named {} to enable zerofs.'.format(
           self.bucket_name))
     self.bucket_id = bucket[0]['bucketId']
-    files = [File(f) for f in self.b2.list_files(self.bucket_id, limit=10000)]
-    self.root = Directory('', files)
+    self.root = Directory('', self.get_files())
     self.fd = 0
 
   def chmod(self, path: str, mode: int):
