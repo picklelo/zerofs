@@ -1,4 +1,5 @@
 from collections import defaultdict
+from enum import Enum
 from logging import getLogger
 from queue import PriorityQueue
 from time import sleep, time
@@ -6,6 +7,17 @@ from threading import Thread, Lock
 from typing import Callable
 
 logger = getLogger('task_queue')
+
+
+class Signal(Enum):
+  """A special signal to send to a worker queue."""
+  STOP = 'stop'
+
+
+class RunState(Enum):
+  """Enum to specify the running state of the task queue."""
+  STOPPED = 'stopped'
+  RUNNING = 'running'
 
 
 class TaskQueue:
@@ -22,6 +34,8 @@ class TaskQueue:
     # Map from task id to latest version number for that task
     self.tasks = defaultdict(int)
     self.task_locks = defaultdict(Lock)
+    self.run_state = RunState.STOPPED
+    self.threads = []
 
   def run_worker(self, i, num_retries=5):
     """Function each worker will run.
@@ -32,8 +46,16 @@ class TaskQueue:
     """
     logger.info('Initialized task worker %s', i)
     while True:
+      # Get the next task.
       task = self.queue.get()
-      time_to_run, task_id, task_version, fn, args, kwargs = task
+
+      # Check any special signals.
+      if task[1] == Signal.STOP:
+        break
+
+      # Otherwise it is a real task to run.
+      time_to_run, task_args = task
+      task_id, task_version, fn, args, kwargs = task_args
       logger.info('Worker received task %s', task_id)
       logger.info('Task queue size %s', self.queue.qsize())
 
@@ -76,11 +98,43 @@ class TaskQueue:
 
       self.queue.task_done()
 
+    logger.info('Worker %s exiting', i)
+
   def start(self):
     """Start the background worker threads."""
+    if self.run_state == RunState.RUNNING:
+      raise ValueError('Task queue already started.')
+
     for i in range(self.num_workers):
       thread = Thread(target=self.run_worker, args=(i,))
       thread.start()
+      self.threads.append(thread)
+    self.run_state = RunState.RUNNING
+
+  def stop(self, finish_ongoing_tasks: bool = True):
+    """Send signals to stop all worker threads.
+
+    Args:
+      finish_ongoing_tasks: If true, finishes all current tasks and then stops
+          the worker threads, otherwise stops the threads immediately.
+    """
+    if self.run_state == RunState.STOPPED:
+      raise ValueError('Task queue already stopped.')
+
+    # Gather the queue mutex to clear it and send stop signals.
+    if not finish_ongoing_tasks:
+      with self.queue.mutex:
+        self.queue.clear()
+
+    for i in range(self.num_workers):
+      self.queue.put((float('inf'), Signal.STOP))
+
+    logger.info('Waiting for workers to stop.')
+    for thread in self.threads:
+      thread.join()
+
+    logger.info('Task queue stopped.')
+    self.run_state = RunState.STOPPED
 
   def submit_task(self, task_id: str, delay: float, fn: Callable, *args,
                   **kwargs):
@@ -93,6 +147,9 @@ class TaskQueue:
       args: The args to pass to fn.
       kwargs: The kwargs to pass to fn.
     """
+    if self.run_state == RunState.STOPPED:
+      raise ValueError('Start the task queue before submitting tasks.')
+
     logger.info('Received task %s %s', task_id, delay)
     time_to_run = time() + delay
     args = args or ()
@@ -102,7 +159,7 @@ class TaskQueue:
       self.tasks[task_id] += 1
       task_version = self.tasks[task_id]
 
-    self.queue.put((time_to_run, task_id, task_version, fn, args, kwargs))
+    self.queue.put((time_to_run, (task_id, task_version, fn, args, kwargs)))
     logger.info('Task queue size %s', self.queue.qsize())
 
   def cancel_task(self, task_id: str):

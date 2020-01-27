@@ -154,7 +154,7 @@ class ZeroFS(LoggingMixIn, Operations):
       raise FuseOSError(ENOENT)
     return self.root.file_at_path(path).metadata
 
-  def getxattr(self, path: str, name: str, _) -> str:
+  def getxattr(self, path: str, name: str, _=None) -> str:
     """Read a file attribute.
 
     Args:
@@ -291,7 +291,7 @@ class ZeroFS(LoggingMixIn, Operations):
       return ENOTEMPTY
     self.root.rm(path)
 
-  def setxattr(self, path: str, name: str, value: str, _, __):
+  def setxattr(self, path: str, name: str, value: str, _=None, __=None):
     """Set an attribute for the file.
 
     Args:
