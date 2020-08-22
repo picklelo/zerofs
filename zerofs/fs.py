@@ -29,7 +29,6 @@ class ZeroFS(LoggingMixIn, Operations):
       upload_delay: Delay in seconds after writing before uploading to cloud.
       num_workers: Number of background thread workers.
     """
-    logger.info('Initializing zerofs from bucket {}'.format(bucket_name))
     self.bucket_name = bucket_name
     self.cache = Cache(cache_dir, cache_size)
     self.b2 = B2()
@@ -47,7 +46,6 @@ class ZeroFS(LoggingMixIn, Operations):
     self.fd = 0
 
     # Initialize the task queue
-    logger.info('Starting task queue')
     self.task_queue = TaskQueue(num_workers)
 
   def init(self, _):

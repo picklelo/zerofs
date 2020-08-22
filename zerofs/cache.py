@@ -17,7 +17,6 @@ class Cache:
       cache_dir: The directory to save cached files to.
       cache_size: The size, in MB, to limit the cache dir to.
     """
-    logger.info('Initializing cache')
     self.cache_dir = cache_dir
     self.cache_size = int(cache_size * 1e6)
     self.index = {}

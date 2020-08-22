@@ -129,17 +129,16 @@ class Directory(FileBase):
 
     while True:
       file_info = self.b2.list_files(
-        self.bucket_id,
-        start_file_name=start_file_name,
-        prefix=self.name,
-        list_directory=True,
-        limit=chunk_size)
+          self.bucket_id,
+          start_file_name=start_file_name,
+          prefix=self.name,
+          list_directory=True,
+          limit=chunk_size)
       for info in file_info:
         key = info['fileName'].strip('/').split('/')[-1]
         if info['action'] == 'folder':
           # This is a directory
-          self.files[key] = Directory(
-            self.b2, self.bucket_id, info['fileName'])
+          self.files[key] = Directory(self.b2, self.bucket_id, info['fileName'])
         else:
           # This is a file
           self.files[key] = File(info)

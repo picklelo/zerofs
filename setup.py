@@ -7,7 +7,7 @@ def read(file_name):
 
 
 setup(name='zerofs',
-      version='0.1.11',
+      version='0.1.12',
       description='Transparant filesystem backed by Backblaze B2 object store',
       long_description=read('README.md'),
       url='https://github.com/picklelo/zerofs',
