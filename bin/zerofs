@@ -7,7 +7,7 @@ import os
 
 from fuse import FUSE
 
-from zerofs.fs import ZeroFS
+from zerofs import ZeroFS
 
 
 if __name__ == '__main__':

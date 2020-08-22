@@ -36,9 +36,15 @@ class ZeroFS(LoggingMixIn, Operations):
     self.file_locks = defaultdict(Lock)
     self.upload_delay = upload_delay
 
-    # Load the directory tree
-    logger.info('Loading directory tree')
-    self._load_dir_tree()
+    # Initialize the root directory
+    buckets = self.b2.list_buckets()
+    bucket = [b for b in buckets if b['bucketName'] == self.bucket_name]
+    if not len(bucket):
+      raise ValueError('Create a bucket named {} to enable zerofs.'.format(
+          self.bucket_name))
+    self.bucket_id = bucket[0]['bucketId']
+    self.root = Directory(self.b2, self.bucket_id, '')
+    self.fd = 0
 
     # Initialize the task queue
     logger.info('Starting task queue')
@@ -53,45 +59,6 @@ class ZeroFS(LoggingMixIn, Operations):
     if type(s) == bytes:
       return s
     return s.encode('utf-8')
-
-  def get_files(self) -> List[File]:
-    """Get all the files in the bucket.
-
-    Returns:
-      The complete list of files in the bucket.
-    """
-    logger.info('getting files...')
-    files = []
-    start_file_id = start_file_name = None
-    limit = 10000
-
-    while True:
-      file_list = [
-          File(f) for f in self.b2.list_files(
-              self.bucket_id,
-              start_file_id=start_file_id,
-              start_file_name=start_file_name,
-              limit=limit)
-      ]
-      files += file_list
-
-      if len(file_list) < limit:
-        break
-      start_file_id = file_list[-1].file_id
-      start_file_name = file_list[-1].name
-
-    return files
-
-  def _load_dir_tree(self):
-    """Load the directory structure into memory."""
-    buckets = self.b2.list_buckets()
-    bucket = [b for b in buckets if b['bucketName'] == self.bucket_name]
-    if not len(bucket):
-      raise ValueError('Create a bucket named {} to enable zerofs.'.format(
-          self.bucket_name))
-    self.bucket_id = bucket[0]['bucketId']
-    self.root = Directory('', self.get_files())
-    self.fd = 0
 
   def chmod(self, path: str, mode: int):
     """Change the file permissions.
@@ -233,7 +200,7 @@ class ZeroFS(LoggingMixIn, Operations):
     """
     logger.info('readdir %s', path)
     dir = self.root.file_at_path(path)
-    return ['.', '..'] + [f for f in dir.files]
+    return ['.', '..'] + list(dir.files.keys())
 
   def readlink(self, path: str) -> str:
     """Read the entire contents of the file.

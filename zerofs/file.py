@@ -1,9 +1,12 @@
 from abc import ABC, abstractmethod
+
 from collections import defaultdict
 from stat import S_IFDIR, S_IFREG
 from time import time
 from typing import Dict, List, Union
 from uuid import UUID, uuid4
+
+from b2py import B2
 
 
 class FileBase(ABC):
@@ -91,35 +94,61 @@ class File(FileBase):
 class Directory(FileBase):
   """A virtual directory containing subfiles and directories."""
 
-  def __init__(self, name: str, files: List[File], mode=0o755):
+  def __init__(self, b2: B2, bucket_id: str, name: str, mode=0o755):
     """Initialize with a list of files in this directory.
 
     Args:
+      b2: The B2 instance to get data from.
+      bucket_id: The bucket the directory lives in.
       name: The name of the directory.
-      files: A list with file metadata for files in the directory.
       mode: The permissions to set.
     """
     super().__init__(name)
-
-    children = defaultdict(list)
-    for file in files:
-      filename = file.name.strip('/')
-      parts = filename.split('/', 1)
-      if len(parts) > 1:
-        # This file is in a subdirectory
-        parent, path = parts
-      else:
-        # This file is in this directory
-        parent, path = '', filename
-      file.name = path
-      children[parent].append(file)
-
-    self.files = {file.name: file for file in children['']}
-    del children['']
-    self.files.update({k: Directory(k, v) for k, v in children.items()})
-
     self.st_mode = S_IFDIR | mode
     self.st_atime = time()
+
+    # Lazily load the files in the directory when needed
+    self.b2 = b2
+    self.bucket_id = bucket_id
+    self.files = {}
+    self.loaded = False
+
+  def _load_files(self, chunk_size=10000):
+    """Load the files in the directory from B2.
+
+    Args:
+      chunk_size: How many files to load in each request.
+    """
+    if self.loaded:
+      # Directory already loaded
+      return
+
+    # Iterate to get all the direct children
+    self.files = {}
+    start_file_name = None
+
+    while True:
+      file_info = self.b2.list_files(
+        self.bucket_id,
+        start_file_name=start_file_name,
+        prefix=self.name,
+        list_directory=True,
+        limit=chunk_size)
+      for info in file_info:
+        key = info['fileName'].strip('/').split('/')[-1]
+        if info['action'] == 'folder':
+          # This is a directory
+          self.files[key] = Directory(
+            self.b2, self.bucket_id, info['fileName'])
+        else:
+          # This is a file
+          self.files[key] = File(info)
+
+      if len(file_info) < chunk_size:
+        break
+      start_file_name = file_info[-1]['fileName']
+
+    self.loaded = True
 
   @property
   def st_mtime(self) -> float:
@@ -131,7 +160,7 @@ class Directory(FileBase):
   @property
   def st_nlink(self) -> int:
     """Number of hard links pointing to the directory."""
-    return 2 + len([f for f in self.files if type(f) == Directory])
+    return 2 + len([f for f in self.files.values() if type(f) == Directory])
 
   @property
   def metadata(self) -> Dict:
@@ -166,6 +195,8 @@ class Directory(FileBase):
     Returns:
       A list of directories indicating the nested structure of the path.
     """
+    if not self.loaded:
+      self._load_files()
     path = self._to_path_list(path)
     if path[0] == '':
       return [self]
