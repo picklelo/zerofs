@@ -94,7 +94,12 @@ class File(FileBase):
 class Directory(FileBase):
   """A virtual directory containing subfiles and directories."""
 
-  def __init__(self, b2: B2, bucket_id: str, name: str, mode=0o755):
+  def __init__(self,
+               b2: B2,
+               bucket_id: str,
+               name: str,
+               mode=0o755,
+               update_period: float = 600.0):
     """Initialize with a list of files in this directory.
 
     Args:
@@ -102,27 +107,38 @@ class Directory(FileBase):
       bucket_id: The bucket the directory lives in.
       name: The name of the directory.
       mode: The permissions to set.
+      update_period: Reload the directory contents after this amount of time (s).
     """
     super().__init__(name)
-    self.st_mode = S_IFDIR | mode
+    self.mode = mode
+    self.st_mode = S_IFDIR | self.mode
     self.st_atime = time()
 
     # Lazily load the files in the directory when needed
     self.b2 = b2
     self.bucket_id = bucket_id
     self.files = {}
-    self.loaded = False
+    self.last_update_time = None
+    self.update_period = update_period
 
-  def _load_files(self, chunk_size=10000):
+  def _should_update(self) -> bool:
+    # If we have never updated yet, we should
+    if self.last_update_time is None:
+      return True
+
+    # If we have updated and the update_period is 0, don't update again
+    if self.update_period == 0.0:
+      return False
+
+    # Update if the update period has passed
+    return (time() - self.last_update_time) > self.update_period
+
+  def _update(self, chunk_size: int = 10000):
     """Load the files in the directory from B2.
 
     Args:
       chunk_size: How many files to load in each request.
     """
-    if self.loaded:
-      # Directory already loaded
-      return
-
     # Iterate to get all the direct children
     self.files = {}
     start_file_name = None
@@ -138,7 +154,12 @@ class Directory(FileBase):
         key = info['fileName'].strip('/').split('/')[-1]
         if info['action'] == 'folder':
           # This is a directory
-          self.files[key] = Directory(self.b2, self.bucket_id, info['fileName'])
+          self.files[key] = Directory(
+              self.b2,
+              self.bucket_id,
+              info['fileName'],
+              mode=self.mode,
+              update_period=self.update_period)
         else:
           # This is a file
           self.files[key] = File(info)
@@ -147,7 +168,7 @@ class Directory(FileBase):
         break
       start_file_name = file_info[-1]['fileName']
 
-    self.loaded = True
+    self.last_update_time = time()
 
   @property
   def st_mtime(self) -> float:
@@ -194,8 +215,10 @@ class Directory(FileBase):
     Returns:
       A list of directories indicating the nested structure of the path.
     """
-    if not self.loaded:
-      self._load_files()
+    # Update the directory contents if needed
+    if self._should_update():
+      self._update()
+
     path = self._to_path_list(path)
     if path[0] == '':
       return [self]
@@ -260,7 +283,12 @@ class Directory(FileBase):
     node = self._find_node(path[:-1])
     if path[-1] in node.files:
       raise KeyError('Directory {} already exists'.format(path))
-    node.files[path[-1]] = Directory(path[-1], [], mode=mode)
+    node.files[path[-1]] = Directory(
+        self.b2,
+        self.bucket_id,
+        path[-1],
+        mode=mode,
+        update_period=self.update_period)
 
   def rm(self, path: Union[str, List[str]]):
     """Remove a file or directory.

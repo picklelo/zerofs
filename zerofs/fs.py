@@ -18,8 +18,13 @@ logger = getLogger('zerofs')
 class ZeroFS(LoggingMixIn, Operations):
   """Virtual filesystem backed by the B2 object store."""
 
-  def __init__(self, bucket_name: str, cache_dir: str, cache_size: int,
-               upload_delay: float, num_workers: int):
+  def __init__(self,
+               bucket_name: str,
+               cache_dir: str = '~/.zerofs',
+               cache_size: int = 1000,
+               upload_delay: float = 5.0,
+               update_period: float = 0.0,
+               num_workers: int = 10):
     """Initialize the FUSE filesystem.
 
     Args:
@@ -27,6 +32,7 @@ class ZeroFS(LoggingMixIn, Operations):
       cache_dir: The directory to cache files to.
       cache_size: The cache size in MB for saving files on local disk.
       upload_delay: Delay in seconds after writing before uploading to cloud.
+      update_period: The period (s) at which to update directory contents.
       num_workers: Number of background thread workers.
     """
     self.bucket_name = bucket_name
@@ -42,7 +48,8 @@ class ZeroFS(LoggingMixIn, Operations):
       raise ValueError('Create a bucket named {} to enable zerofs.'.format(
           self.bucket_name))
     self.bucket_id = bucket[0]['bucketId']
-    self.root = Directory(self.b2, self.bucket_id, '')
+    self.root = Directory(
+        self.b2, self.bucket_id, '', update_period=update_period)
     self.fd = 0
 
     # Initialize the task queue

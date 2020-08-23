@@ -138,7 +138,6 @@ class Cache:
     file_path = self._path_to_file(file_id)
 
     with open(file_path, 'rb') as f:
-      print('reading', file_path, offset, size)
       f.seek(offset)
       return f.read(size)
 
