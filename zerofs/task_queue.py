@@ -136,8 +136,7 @@ class TaskQueue:
     logger.info('Task queue stopped.')
     self.run_state = RunState.STOPPED
 
-  def submit_task(self, task_id: str, delay: float, fn: Callable, *args,
-                  **kwargs):
+  def submit_task(self, task_id: str, delay: float, fn: Callable, *args, **kwargs):
     """Add a task to run.
 
     Args:

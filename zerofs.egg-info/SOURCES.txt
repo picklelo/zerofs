@@ -1,0 +1,13 @@
+README.md
+setup.py
+bin/zerofs
+zerofs/__init__.py
+zerofs/cache.py
+zerofs/file.py
+zerofs/fs.py
+zerofs/task_queue.py
+zerofs.egg-info/PKG-INFO
+zerofs.egg-info/SOURCES.txt
+zerofs.egg-info/dependency_links.txt
+zerofs.egg-info/requires.txt
+zerofs.egg-info/top_level.txt

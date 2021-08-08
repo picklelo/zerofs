@@ -15,8 +15,7 @@ setup(
     author='Nikhil Rao',
     author_email='nikhil@nikhilrao.me',
     classifiers=[
-        'Development Status :: 3 - Alpha',
-        'License :: OSI Approved :: MIT License',
+        'Development Status :: 3 - Alpha', 'License :: OSI Approved :: MIT License',
         'Programming Language :: Python :: 3'
     ],
     keywords='backblaze b2 zero fs filesystem',

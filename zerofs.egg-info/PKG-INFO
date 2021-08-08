@@ -1,0 +1,15 @@
+Metadata-Version: 1.1
+Name: zerofs
+Version: 0.2.0
+Summary: Transparant filesystem backed by Backblaze B2 object store
+Home-page: https://github.com/picklelo/zerofs
+Author: Nikhil Rao
+Author-email: nikhil@nikhilrao.me
+License: UNKNOWN
+Description: Transparant filesystem backed by Backblaze B2 object store.
+        
+Keywords: backblaze b2 zero fs filesystem
+Platform: UNKNOWN
+Classifier: Development Status :: 3 - Alpha
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python :: 3

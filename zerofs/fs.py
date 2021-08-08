@@ -45,11 +45,9 @@ class ZeroFS(LoggingMixIn, Operations):
     buckets = self.b2.list_buckets()
     bucket = [b for b in buckets if b['bucketName'] == self.bucket_name]
     if not len(bucket):
-      raise ValueError('Create a bucket named {} to enable zerofs.'.format(
-          self.bucket_name))
+      raise ValueError('Create a bucket named {} to enable zerofs.'.format(self.bucket_name))
     self.bucket_id = bucket[0]['bucketId']
-    self.root = Directory(
-        self.b2, self.bucket_id, '', update_period=update_period)
+    self.root = Directory(self.b2, self.bucket_id, '', update_period=update_period)
     self.fd = 0
 
     # Initialize the task queue
@@ -101,8 +99,7 @@ class ZeroFS(LoggingMixIn, Operations):
     logger.info('create %s %s', path, mode)
     file = self.root.touch(path, mode)
     self.cache.add(file.file_id, self._to_bytes(''))
-    self.task_queue.submit_task(file.file_id, self.upload_delay,
-                                self._upload_file, path)
+    self.task_queue.submit_task(file.file_id, self.upload_delay, self._upload_file, path)
     return self.open()
 
   def open(self, _=None, __=None) -> int:
@@ -391,7 +388,6 @@ class ZeroFS(LoggingMixIn, Operations):
       file.update(file_size=file_size)
 
       # Submit task to upload to object store
-      self.task_queue.submit_task(file.file_id, self.upload_delay,
-                                  self._upload_file, path)
+      self.task_queue.submit_task(file.file_id, self.upload_delay, self._upload_file, path)
 
       return num_bytes

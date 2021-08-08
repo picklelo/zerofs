@@ -69,11 +69,7 @@ class File(FileBase):
         'st_size': self.st_size
     }
 
-  def update(self,
-             file_id: str = None,
-             file_size: int = None,
-             modify_time: str = None,
-             access_time: int = None):
+  def update(self, file_id: str = None, file_size: int = None, modify_time: str = None, access_time: int = None):
     """Update the file metadata.
     Automatically updates the last modified time.
 
@@ -94,12 +90,7 @@ class File(FileBase):
 class Directory(FileBase):
   """A virtual directory containing subfiles and directories."""
 
-  def __init__(self,
-               b2: B2,
-               bucket_id: str,
-               name: str,
-               mode=0o755,
-               update_period: float = 600.0):
+  def __init__(self, b2: B2, bucket_id: str, name: str, mode=0o755, update_period: float = 600.0):
     """Initialize with a list of files in this directory.
 
     Args:
@@ -145,21 +136,13 @@ class Directory(FileBase):
 
     while True:
       file_info = self.b2.list_files(
-          self.bucket_id,
-          start_file_name=start_file_name,
-          prefix=self.name,
-          list_directory=True,
-          limit=chunk_size)
+          self.bucket_id, start_file_name=start_file_name, prefix=self.name, list_directory=True, limit=chunk_size)
       for info in file_info:
         key = info['fileName'].strip('/').split('/')[-1]
         if info['action'] == 'folder':
           # This is a directory
           self.files[key] = Directory(
-              self.b2,
-              self.bucket_id,
-              info['fileName'],
-              mode=self.mode,
-              update_period=self.update_period)
+              self.b2, self.bucket_id, info['fileName'], mode=self.mode, update_period=self.update_period)
         else:
           # This is a file
           self.files[key] = File(info)
@@ -267,8 +250,7 @@ class Directory(FileBase):
       return self
 
     if (path[0] not in self.files or type(self.files[path[0]]) != Directory):
-      raise KeyError('Cannot find node, directory {} does not exist'.format(
-          path[0]))
+      raise KeyError('Cannot find node, directory {} does not exist'.format(path[0]))
 
     return self.files[path[0]]._find_node(path[1:])
 
@@ -283,12 +265,7 @@ class Directory(FileBase):
     node = self._find_node(path[:-1])
     if path[-1] in node.files:
       raise KeyError('Directory {} already exists'.format(path))
-    node.files[path[-1]] = Directory(
-        self.b2,
-        self.bucket_id,
-        path[-1],
-        mode=mode,
-        update_period=self.update_period)
+    node.files[path[-1]] = Directory(self.b2, self.bucket_id, path[-1], mode=mode, update_period=self.update_period)
 
   def rm(self, path: Union[str, List[str]]):
     """Remove a file or directory.
