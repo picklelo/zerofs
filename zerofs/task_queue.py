@@ -29,6 +29,7 @@ class TaskQueue:
     Args;
       num_workers: How many worker threads to launch to process tasks.
     """
+    assert num_workers > 0, 'At least one worker required.'
     self.num_workers = num_workers
     self.queue = PriorityQueue()
     # Map from task id to latest version number for that task

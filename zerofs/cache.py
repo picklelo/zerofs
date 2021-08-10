@@ -1,36 +1,53 @@
 import os
+import logging
+import pathlib
 from glob import glob
-from logging import getLogger
 
 from b2py import utils as b2_utils
 
-logger = getLogger('cache')
+logger = logging.getLogger('cache')
 
+
+# Default values.
+DEFAULT_CACHE_SIZE = 5e9  # 5 GB.
 
 class Cache:
   """Cache files to the local disk to save bandwidth."""
 
-  def __init__(self, cache_dir: str, cache_size: int):
+  def __init__(self, cache_dir: pathlib.Path, cache_size: int = DEFAULT_CACHE_SIZE, make_dir: bool = False):
     """Initialize a local object cache.
 
     Args:
       cache_dir: The directory to save cached files to.
       cache_size: The size, in MB, to limit the cache dir to.
+      make_dir: If True, create the cache directory if it does not exist.
     """
+    # Check if the cache directory exists.
+    if make_dir:
+      os.makedirs(cache_dir.name, exist_ok=True)
+    assert cache_dir.is_dir(), f'No such directory {cache_dir.name}'
     self.cache_dir = cache_dir
-    self.cache_size = int(cache_size * 1e6)
-    self.index = {}
-    self.touch_list = []
+
+    # Set the cache size (in bytes), and coerce it to an int.
+    assert cache_size > 0, 'Cache size must be positive.'
+    self.cache_size = int(cache_size)
+
+    # Initialize the index that maps the local file to the path in B2.
+    self.index: dict[str, str] = {}
+
+    # The touch list used for the LRU cache.
+    self.touch_list: list[str] = []
+
+    # If the
     self._populate_index()
 
   def _populate_index(self):
     """Read the cache dir and set a local index of records."""
-    os.makedirs(self.cache_dir, exist_ok=True)
     local_files = glob('{}/*'.format(self.cache_dir))
     for file in local_files:
       self._add_to_index(os.path.basename(file), os.path.getsize(file))
 
-  def _touch_file(self, file_id):
+  def touch_file(self, file_id):
     """Move the file to the end of the queue by touching it.
 
     Args:
@@ -75,11 +92,11 @@ class Cache:
       file_id: The file key.
       content_size: The size of the file's contents.
     """
-    self._touch_file(file_id)
+    self.touch_file(file_id)
     self.index[file_id] = content_size
     self._recover_disk_space()
 
-  def has(self, file_id):
+  def contains(self, file_id):
     """
     Args:
       file_id: The file to check.
@@ -89,7 +106,7 @@ class Cache:
     """
     return file_id in self.index
 
-  def add(self, file_id: str, contents: bytes):
+  def add_file(self, file_id: str, contents: bytes):
     """Add a file to the cache.
 
     Args:
@@ -111,10 +128,12 @@ class Cache:
     Returns:
       The number of bytes written.
     """
-    if not self.has(file_id):
-      raise KeyError('No file {}'.format(file_id))
+    assert offset > 0, f'Offset should be positive, got {offset}'
+  
+    if not self.contains(file_id):
+      raise KeyError(f'Cache does not contain a file with id {file_id}')
 
-    self._touch_file(file_id)
+    self.touch_file(file_id)
     file_path = self._path_to_file(file_id)
 
     with open(file_path, 'r+b') as f:
@@ -156,7 +175,7 @@ class Cache:
 
     Args:
       file_id: The id of the file in the cache.
-  
+
     Returns:
       The file size.
     """

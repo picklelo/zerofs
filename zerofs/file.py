@@ -1,6 +1,5 @@
-from abc import ABC, abstractmethod
+from abc import ABC
 
-from collections import defaultdict
 from stat import S_IFDIR, S_IFREG
 from time import time
 from typing import Dict, List, Union
@@ -70,8 +69,7 @@ class File(FileBase):
     }
 
   def update(self, file_id: str = None, file_size: int = None, modify_time: str = None, access_time: int = None):
-    """Update the file metadata.
-    Automatically updates the last modified time.
+    """Update the file metadata. Automatically updates the last modified time.
 
     Args:
       file_id: The new file id.

@@ -18,7 +18,7 @@ setup(
         'Development Status :: 3 - Alpha', 'License :: OSI Approved :: MIT License',
         'Programming Language :: Python :: 3'
     ],
-    keywords='backblaze b2 zero fs filesystem',
+    keywords='backblaze b2 zerofs filesystem',
     packages=['zerofs'],
     scripts=['bin/zerofs'],
     install_requires=['backblazeb2', 'fusepy'])

@@ -129,7 +129,7 @@ class ZeroFS(LoggingMixIn, Operations):
     Args:
       path: The path to the file.
       name: The name of the attribute to read.
-    
+
     Returns:
       The value of the attribute for the file.
     """
@@ -196,7 +196,7 @@ class ZeroFS(LoggingMixIn, Operations):
 
     Args:
       path: The path to the directory.
-    
+
     Returns:
       The names of the entries (files and subdirectories).
     """
@@ -343,7 +343,6 @@ class ZeroFS(LoggingMixIn, Operations):
 
     Args:
       path: The path of the file to upload.
-
     """
     logger.info('upload %s', path)
     file = self.root.file_at_path(path)
@@ -370,7 +369,7 @@ class ZeroFS(LoggingMixIn, Operations):
       path: The file to write to.
       data: The bytes to write.
       offset: The offset in the file to begin writing at.
-    
+
     Returns:
       The number of bytes written.
     """
